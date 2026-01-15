@@ -2,6 +2,10 @@ Flask==2.3.3
 flask-cors==4.0.0
 flask-socketio==5.3.4
 python-socketio==5.9.0
-python-engineio==4.5.1
-firebase-admin==6.2.0
+python-engineio==4.7.0  # Changed from 4.5.1 to 4.7.0 or higher
 python-dotenv==1.0.0
+eventlet==0.33.3
+gunicorn==21.2.0
+
+# Firebase is optional - remove if not using
+# firebase-admin==6.2.0
