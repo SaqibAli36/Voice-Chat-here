@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ChatGameApp - Chat Room</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #050510;
+            color: #00f5ff;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        #top-bar {
+            height: 50px;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 10px;
+            border-bottom: 2px solid #00f5ff;
+        }
+        #room-info {
+            background: rgba(0,0,0,0.4);
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: bold;
+            max-width: 70%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        #exit-btn {
+            padding: 6px 10px;
+            font-size: 13px;
+            border: none;
+            border-radius: 6px;
+            background: #ff00ff;
+            color: white;
+            cursor: pointer;
+        }
+        #mic-wrapper { padding: 10px; }
+        #mic-container {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 10px;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        .mic-slot {
+            position: relative;
+            aspect-ratio: 1/1;
+            border-radius: 50%;
+            border: 2px solid #00f5ff;
+            background: rgba(255,255,255,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            cursor: pointer;
+            overflow: hidden;
+        }
+        .mic-slot audio {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            top: 0;
+            left: 0;
+        }
+        #chat {
+            flex: 1;
+            margin: 10px;
+            padding: 10px;
+            border: 2px solid #00f5ff;
+            border-radius: 8px;
+            background: rgba(0,0,0,0.5);
+            overflow-y: auto;
+        }
+        #chat-input {
+            display: flex;
+            gap: 8px;
+            padding: 10px;
+        }
+        #chat-input input {
+            flex: 1;
+            padding: 10px;
+            border-radius: 6px;
+            border: none;
+            background: rgba(255,255,255,0.1);
+            color: #00f5ff;
+            font-size: 14px;
+        }
+        #chat-input input:focus {
+            outline: none;
+            border: 1px solid #ff00ff;
+            background: rgba(255,255,255,0.15);
+        }
+        #chat-input button {
+            padding: 10px 16px;
+            border: none;
+            border-radius: 6px;
+            background: #ff00ff;
+            color: white;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        #chat-input button:hover {
+            background: #ff44ff;
+        }
+        .system-msg { color: #ff00ff; font-style: italic; }
+        .user-msg { margin: 5px 0; }
+        .msg-time {
+            font-size: 11px;
+            color: #888;
+            margin-left: 5px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="top-bar">
+    <div id="room-info">
+        <span id="group-name"></span> | Room ID: <span id="room-id"></span> | User: <span id="user-name"></span>
+    </div>
+    <button id="exit-btn">Exit Room</button>
+</div>
+
+<div id="mic-wrapper">
+    <div id="mic-container">
+        <div class="mic-slot" data-slot="1">1</div>
+        <div class="mic-slot" data-slot="2">2</div>
+        <div class="mic-slot" data-slot="3">3</div>
+        <div class="mic-slot" data-slot="4">4</div>
+        <div class="mic-slot" data-slot="5">5</div>
+        <div class="mic-slot" data-slot="6">6</div>
+        <div class="mic-slot" data-slot="7">7</div>
+        <div class="mic-slot" data-slot="8">8</div>
+        <div class="mic-slot" data-slot="9">9</div>
+        <div class="mic-slot" data-slot="10">10</div>
+    </div>
+</div>
+
+<div id="chat"></div>
+
+<div id="chat-input">
+    <input type="text" id="message" placeholder="Type a message and press Enter to send..." autocomplete="off">
+    <button id="send-btn">Send</button>
+</div>
+
+<script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+<script>
+const socket = io();
+
+const params = new URLSearchParams(window.location.search);
+const room_id = params.get("room") || Math.floor(Math.random()*900000 + 100000);
+const user = params.get("user") || "User" + Math.floor(Math.random()*1000);
+const group_name = params.get("group") || "Group";
+
+document.getElementById("room-id").textContent = room_id;
+document.getElementById("group-name").textContent = `${group_name}`;
+document.getElementById("user-name").textContent = user;
+
+// Exit button
+document.getElementById("exit-btn").onclick = () => {
+    socket.emit("leave_room_event", {room_id, user});
+    window.location.href = "index.html";
+};
+
+// Join room
+socket.emit("join_room_event", {room_id, user, group_name});
+
+const chat = document.getElementById("chat");
+const messageInput = document.getElementById("message");
+const sendButton = document.getElementById("send-btn");
+
+// Function to add message to chat
+function addMessage(msg, isSystem=false){
+    const p = document.createElement("div");
+    p.className = isSystem ? "system-msg" : "user-msg";
+    
+    const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    
+    if(isSystem) {
+        p.textContent = `[${time}] ${msg}`;
+        p.classList.add("system-msg");
+    } else {
+        p.innerHTML = `<strong>${msg.user}:</strong> ${msg.text} <span class="msg-time">${time}</span>`;
+    }
+    
+    chat.appendChild(p);
+    chat.scrollTop = chat.scrollHeight;
+}
+
+// Function to send message
+function sendMessage() {
+    const text = messageInput.value.trim();
+    if(text === "") return;
+    
+    socket.emit("send_message", {room_id, user, text: text});
+    messageInput.value = "";
+    messageInput.focus();
+}
+
+// Send button click
+sendButton.onclick = sendMessage;
+
+// Enter key to send message
+messageInput.addEventListener("keypress", function(event) {
+    if (event.key === "Enter") {
+        event.preventDefault(); // Prevent form submission if inside a form
+        sendMessage();
+    }
+});
+
+// Focus on input when page loads
+window.addEventListener("load", () => {
+    messageInput.focus();
+});
+
+// Socket event handlers
+socket.on("new_message", data => {
+    const isSystem = data.user === "System";
+    addMessage(data, isSystem);
+});
+
+socket.on("room_data", data => {
+    data.messages.forEach(m => {
+        const isSystem = m.user === "System";
+        addMessage(m, isSystem);
+    });
+    updateMicSlots(data.mic_slots);
+});
+
+let localStream;
+let peers = {};
+
+// Media functions
+async function startMic() {
+    if(!localStream){
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+            console.log("Microphone access granted");
+        } catch (error) {
+            console.error("Error accessing microphone:", error);
+            alert("Microphone access is required for voice chat. Please allow microphone permissions.");
+        }
+    }
+}
+
+function createPeer(peerId){
+    const pc = new RTCPeerConnection({
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+    });
+    peers[peerId] = pc;
+
+    if(localStream) {
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    }
+
+    pc.ontrack = e => {
+        const slot = document.querySelector(`.mic-slot[data-slot='${peerId}']`) || document.createElement("div");
+        let audioEl = slot.querySelector("audio");
+        if(!audioEl){
+            audioEl = document.createElement("audio");
+            audioEl.autoplay = true;
+            audioEl.controls = false;
+            slot.appendChild(audioEl);
+        }
+        audioEl.srcObject = e.streams[0];
+    };
+
+    pc.onicecandidate = e => {
+        if(e.candidate) socket.emit("webrtc_ice", { target: peerId, candidate: e.candidate });
+    };
+
+    pc.onconnectionstatechange = () => {
+        console.log(`Peer ${peerId} connection state: ${pc.connectionState}`);
+    };
+
+    return pc;
+}
+
+// WebRTC signaling handlers
+socket.on("webrtc_offer", async data => {
+    await startMic();
+    const pc = createPeer(data.from);
+    await pc.setRemoteDescription(data.offer);
+    
+    if(localStream && pc.getSenders().length === 0){
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    }
+    
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit("webrtc_answer", { target: data.from, answer });
+});
+
+socket.on("webrtc_answer", async data => {
+    if(peers[data.from]) {
+        await peers[data.from].setRemoteDescription(data.answer);
+    }
+});
+
+socket.on("webrtc_ice", async data => {
+    if(peers[data.from]) {
+        await peers[data.from].addIceCandidate(data.candidate);
+    }
+});
+
+// Mic slot click handler
+document.querySelectorAll(".mic-slot").forEach(slot => {
+    slot.onclick = async () => {
+        await startMic();
+        socket.emit("join_mic", { room_id, slot: slot.dataset.slot, user });
+        
+        // Create offers for all existing peers
+        for(let id in peers){
+            const pc = peers[id];
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            socket.emit("webrtc_offer", { target: id, offer });
+        }
+    };
+});
+
+// Update mic slots display
+function updateMicSlots(data){
+    document.querySelectorAll(".mic-slot").forEach(s => {
+        const slotNumber = s.dataset.slot;
+        const userName = data[slotNumber];
+        const audioEl = s.querySelector("audio");
+        
+        if(userName){
+            s.style.background = "rgba(255, 0, 255, 0.3)";
+            s.style.borderColor = "#ff00ff";
+            s.innerHTML = `<div style="font-size:10px;position:absolute;bottom:2px;">${userName}</div>`;
+            if(!audioEl){
+                const a = document.createElement("audio");
+                a.autoplay = true;
+                a.controls = false;
+                s.appendChild(a);
+            }
+        } else {
+            s.style.background = "rgba(255,255,255,0.1)";
+            s.style.borderColor = "#00f5ff";
+            s.innerHTML = slotNumber;
+            if(audioEl) audioEl.remove();
+        }
+    });
+}
+
+socket.on("mic_update", updateMicSlots);
+
+socket.on("mic_error", data => {
+    alert(data.message);
+});
+
+// Cleanup on page unload
+window.addEventListener("beforeunload", () => {
+    socket.emit("leave_room_event", {room_id, user});
+});
+
+// Connection status
+socket.on("connect", () => {
+    console.log("Connected to server");
+});
+
+socket.on("disconnect", () => {
+    console.log("Disconnected from server");
+});
+</script>
+</body>
+</html>

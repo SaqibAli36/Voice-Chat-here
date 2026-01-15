@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ChatGame Login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<h2>Login with Email</h2>
+
+<input id="email" placeholder="Enter your email">
+<button onclick="sendLink()">Send Login Link</button>
+
+<script>
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+
+function sendLink() {
+  const email = document.getElementById("email").value;
+
+  const settings = {
+    url: "http://localhost/frontend/chat.html",
+    handleCodeInApp: true
+  };
+
+  auth.sendSignInLinkToEmail(email, settings).then(() => {
+    localStorage.setItem("email", email);
+    alert("Check your email for login link");
+  });
+}
+</script>
+
+</body>
+</html>

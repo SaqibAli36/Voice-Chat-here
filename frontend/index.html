@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ChatGameApp - Lobby</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { margin:0; font-family: Arial, sans-serif; background:#050510; color:#00f5ff; display:flex; justify-content:center; align-items:center; height:100vh; }
+        #container { background: rgba(0,0,0,0.7); padding:30px; border:2px solid #00f5ff; border-radius:10px; text-align:center; width:90%; max-width:400px; }
+        input, button { width:100%; padding:10px; margin:10px 0; border-radius:5px; border:none; font-size:16px; }
+        button { background:#ff00ff; color:#fff; cursor:pointer; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h2>Welcome to ChatGameApp</h2>
+        <input type="text" id="username" placeholder="Enter your username">
+        <input type="text" id="groupname" placeholder="Enter group name">
+        <button id="create-btn">Create Room</button>
+        <input type="number" id="roomid" placeholder="Enter Room UID to join">
+        <button id="join-btn">Join Room</button>
+    </div>
+
+    <script>
+        document.getElementById("create-btn").onclick = () => {
+            const user = document.getElementById("username").value.trim();
+            const group = document.getElementById("groupname").value.trim();
+            if(!user || !group){ alert("Username & Group name required"); return; }
+
+            // Generate random 6-digit UID
+            const room_id = Math.floor(Math.random()*900000+100000);
+            // Redirect to chat page with params
+            window.location.href = `chat.html?room=${room_id}&user=${encodeURIComponent(user)}&group=${encodeURIComponent(group)}`;
+        };
+
+        document.getElementById("join-btn").onclick = () => {
+            const user = document.getElementById("username").value.trim();
+            const room_id = document.getElementById("roomid").value.trim();
+            if(!user || !room_id){ alert("Username & Room UID required"); return; }
+
+            window.location.href = `chat.html?room=${room_id}&user=${encodeURIComponent(user)}&group=Joined`;
+        };
+    </script>
+</body>
+</html>
