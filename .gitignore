@@ -1,0 +1,8 @@
+# Firebase/credentials
+backend/firebase_key.json
+*.json
+.env
+backend/.env
+frontend/
+.env.local
+.env.

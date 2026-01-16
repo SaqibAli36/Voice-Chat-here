@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - Voice Control Room</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container admin-container">
+        <div class="header">
+            <h1>👑 ADMIN CONTROL ROOM</h1>
+            <div class="room-info">
+                <div class="info-badge">Room: <span id="room-id">ADMIN-VOICE-ROOM-2024</span></div>
+                <div class="info-badge">Status: <span id="admin-status">🔴 Offline</span></div>
+            </div>
+        </div>
+        
+        <!-- Admin Login -->
+        <div id="login-section" class="section">
+            <h2>🔐 Admin Login</h2>
+            <div class="input-group">
+                <input type="password" id="admin-password" placeholder="Enter admin password" autocomplete="off">
+                <button id="login-btn" class="btn-primary">🚀 Login as Admin</button>
+            </div>
+        </div>
+        
+        <!-- Admin Dashboard -->
+        <div id="dashboard" class="section" style="display: none;">
+            <h2>📊 Admin Dashboard</h2>
+            
+            <div class="status-panel">
+                <div class="status-card">
+                    <h3>🎤 Admin Mic</h3>
+                    <div class="mic-controls">
+                        <button id="admin-mic-btn" class="btn-secondary" disabled>🎤 Start Voice</button>
+                        <button id="admin-mute-btn" class="btn-secondary" disabled>🔇 Mute</button>
+                    </div>
+                    <div class="mic-status" id="admin-mic-status">Microphone: Not connected</div>
+                </div>
+                
+                <div class="status-card">
+                    <h3>👤 Guest Status</h3>
+                    <div id="guest-status">❌ No guest connected</div>
+                    <div class="guest-info">
+                        <p>Share this link with guest:</p>
+                        <div class="share-link">
+                            <input type="text" id="guest-link" readonly value="http://localhost:5000/">
+                            <button onclick="copyGuestLink()" class="btn-secondary">📋 Copy</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Connection Status -->
+            <div class="connection-status">
+                <h3>🔗 Connection Status</h3>
+                <div id="connection-status">Disconnected from guest</div>
+                <div class="webrtc-controls">
+                    <button id="initiate-call-btn" class="btn-primary" disabled>📞 Initiate Voice Call</button>
+                    <button id="hangup-btn" class="btn-danger" disabled>📞 Hang Up</button>
+                </div>
+            </div>
+            
+            <!-- Instructions -->
+            <div class="instructions">
+                <h3>📋 Instructions</h3>
+                <ol>
+                    <li>Click "Start Voice" to enable your microphone</li>
+                    <li>Share the guest link with one person</li>
+                    <li>Click "Initiate Voice Call" when guest joins</li>
+                    <li>Speak normally - guest will hear you</li>
+                </ol>
+            </div>
+        </div>
+        
+        <!-- Connection Error -->
+        <div id="error-section" class="section error-section" style="display: none;">
+            <h2>❌ Connection Error</h2>
+            <p id="error-message"></p>
+            <button onclick="window.location.reload()" class="btn-primary">🔄 Retry</button>
+        </div>
+    </div>
+    
+    <script src="https://cdn.socket.io/4.6.1/socket.io.min.js"></script>
+    <script>
+        const socket = io();
+        let localStream = null;
+        let peerConnection = null;
+        let isAdmin = false;
+        let isMuted = false;
+        let isCallActive = false;
+        
+        // DOM Elements
+        const loginSection = document.getElementById('login-section');
+        const dashboard = document.getElementById('dashboard');
+        const errorSection = document.getElementById('error-section');
+        const adminPasswordInput = document.getElementById('admin-password');
+        const loginBtn = document.getElementById('login-btn');
+        const adminMicBtn = document.getElementById('admin-mic-btn');
+        const adminMuteBtn = document.getElementById('admin-mute-btn');
+        const guestStatus = document.getElementById('guest-status');
+        const connectionStatus = document.getElementById('connection-status');
+        const initiateCallBtn = document.getElementById('initiate-call-btn');
+        const hangupBtn = document.getElementById('hangup-btn');
+        const adminStatus = document.getElementById('admin-status');
+        
+        // WebRTC Configuration
+        const pcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+        
+        // Socket.IO Events
+        socket.on('connect', () => {
+            console.log('✅ Connected to server');
+        });
+        
+        socket.on('admin-registered', (data) => {
+            if (data.success) {
+                console.log('✅ Admin registered successfully');
+                isAdmin = true;
+                adminStatus.textContent = '🟢 Online';
+                loginSection.style.display = 'none';
+                dashboard.style.display = 'block';
+                updateUsersStatus();
+            } else {
+                alert('❌ ' + data.error);
+            }
+        });
+        
+        socket.on('guest-joined', () => {
+            console.log('✅ Guest joined the room');
+            guestStatus.innerHTML = '✅ Guest connected';
+            updateCallControls(true);
+        });
+        
+        socket.on('guest-disconnected', () => {
+            console.log('❌ Guest disconnected');
+            guestStatus.innerHTML = '❌ No guest connected';
+            updateCallControls(false);
+            if (isCallActive) {
+                hangUpCall();
+            }
+        });
+        
+        socket.on('guest-offer', async (data) => {
+            console.log('📥 Received offer from guest');
+            if (!peerConnection) {
+                createPeerConnection();
+            }
+            
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                
+                socket.emit('admin-answer', {
+                    answer: answer,
+                    target: 'guest'
+                });
+                
+                connectionStatus.textContent = 'Connected to guest';
+                isCallActive = true;
+                updateCallControls(true);
+            } catch (error) {
+                console.error('Error handling guest offer:', error);
+            }
+        });
+        
+        socket.on('ice-candidate', async (data) => {
+            if (peerConnection && data.candidate) {
+                try {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                } catch (error) {
+                    console.error('Error adding ICE candidate:', error);
+                }
+            }
+        });
+        
+        // WebRTC Functions
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(pcConfig);
+            
+            // Add local stream tracks
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+            }
+            
+            // Handle ICE candidates
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('ice-candidate', {
+                        candidate: event.candidate,
+                        target: 'guest'
+                    });
+                }
+            };
+            
+            // Handle remote stream
+            peerConnection.ontrack = (event) => {
+                console.log('🎧 Received remote audio stream');
+                const remoteAudio = document.createElement('audio');
+                remoteAudio.autoplay = true;
+                remoteAudio.controls = false;
+                remoteAudio.style.display = 'none';
+                document.body.appendChild(remoteAudio);
+                remoteAudio.srcObject = event.streams[0];
+            };
+            
+            // Handle connection state
+            peerConnection.onconnectionstatechange = () => {
+                console.log('Connection state:', peerConnection.connectionState);
+                if (peerConnection.connectionState === 'connected') {
+                    connectionStatus.textContent = '✅ Voice connected';
+                } else if (peerConnection.connectionState === 'disconnected') {
+                    connectionStatus.textContent = '❌ Voice disconnected';
+                }
+            };
+        }
+        
+        async function startVoice() {
+            try {
+                // Request microphone
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    },
+                    video: false 
+                });
+                
+                console.log('✅ Microphone access granted');
+                adminMicBtn.textContent = '🎤 Voice Active';
+                adminMicBtn.disabled = true;
+                adminMuteBtn.disabled = false;
+                document.getElementById('admin-mic-status').textContent = 'Microphone: Active';
+                
+                // Enable call initiation
+                initiateCallBtn.disabled = false;
+                
+            } catch (error) {
+                console.error('❌ Microphone error:', error);
+                alert('Failed to access microphone. Please check permissions.');
+            }
+        }
+        
+        async function initiateCall() {
+            if (!peerConnection) {
+                createPeerConnection();
+            }
+            
+            try {
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                socket.emit('admin-offer', {
+                    offer: offer,
+                    target: 'guest'
+                });
+                
+                connectionStatus.textContent = 'Calling guest...';
+                initiateCallBtn.disabled = true;
+                hangupBtn.disabled = false;
+                isCallActive = true;
+                
+            } catch (error) {
+                console.error('Error creating offer:', error);
+            }
+        }
+        
+        function hangUpCall() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            
+            connectionStatus.textContent = 'Disconnected from guest';
+            initiateCallBtn.disabled = false;
+            hangupBtn.disabled = true;
+            isCallActive = false;
+        }
+        
+        function toggleMute() {
+            if (localStream) {
+                isMuted = !isMuted;
+                localStream.getAudioTracks().forEach(track => {
+                    track.enabled = !isMuted;
+                });
+                
+                adminMuteBtn.textContent = isMuted ? '🔊 Unmute' : '🔇 Mute';
+            }
+        }
+        
+        function updateCallControls(guestConnected) {
+            if (guestConnected && localStream) {
+                initiateCallBtn.disabled = false;
+            } else {
+                initiateCallBtn.disabled = true;
+                hangupBtn.disabled = true;
+            }
+        }
+        
+        function updateUsersStatus() {
+            socket.emit('get-users');
+        }
+        
+        function copyGuestLink() {
+            const linkInput = document.getElementById('guest-link');
+            linkInput.select();
+            document.execCommand('copy');
+            alert('Guest link copied to clipboard!');
+        }
+        
+        // Event Listeners
+        loginBtn.addEventListener('click', async () => {
+            const password = adminPasswordInput.value.trim();
+            
+            if (!password) {
+                alert('Please enter admin password');
+                return;
+            }
+            
+            // Verify admin password
+            const response = await fetch('/api/verify-admin', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({password: password})
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                socket.emit('register-admin');
+            } else {
+                alert('Invalid admin password');
+            }
+        });
+        
+        adminPasswordInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                loginBtn.click();
+            }
+        });
+        
+        adminMicBtn.addEventListener('click', startVoice);
+        adminMuteBtn.addEventListener('click', toggleMute);
+        initiateCallBtn.addEventListener('click', initiateCall);
+        hangupBtn.addEventListener('click', hangUpCall);
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            adminPasswordInput.focus();
+        });
+        
+        // Cleanup
+        window.addEventListener('beforeunload', () => {
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            if (peerConnection) {
+                peerConnection.close();
+            }
+        });
+    </script>
+</body>
+</html>
