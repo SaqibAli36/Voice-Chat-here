@@ -85,6 +85,16 @@
             color: var(--primary);
         }
         
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        button:disabled:hover {
+            background: var(--secondary);
+            transform: none;
+        }
+        
         /* Status Bar */
         .status-bar {
             text-align: center;
@@ -278,21 +288,22 @@
             display: none;
         }
         
-        /* Permission Request */
-        .permission-overlay {
+        /* Setup Overlay */
+        .setup-overlay {
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0,0,0,0.9);
+            background: rgba(0,0,0,0.95);
             display: flex;
             justify-content: center;
             align-items: center;
             z-index: 1000;
+            padding: 20px;
         }
         
-        .permission-box {
+        .setup-box {
             background: var(--bg-medium);
             border: 2px solid var(--primary);
             border-radius: 10px;
@@ -302,14 +313,30 @@
             text-align: center;
         }
         
-        .permission-box h3 {
+        .setup-box h3 {
             color: var(--secondary);
             margin-bottom: 15px;
         }
         
-        .permission-box p {
+        .setup-box p {
             margin-bottom: 20px;
             line-height: 1.6;
+        }
+        
+        .setup-box input {
+            width: 100%;
+            padding: 12px 15px;
+            margin-bottom: 15px;
+            border: 2px solid var(--primary);
+            border-radius: 6px;
+            background: var(--bg-light);
+            color: var(--primary);
+            font-size: 14px;
+        }
+        
+        .setup-box input:focus {
+            outline: none;
+            border-color: var(--secondary);
         }
         
         /* Responsive */
@@ -338,6 +365,30 @@
     </style>
 </head>
 <body>
+    <!-- Setup Overlay (shown until TRTC is configured) -->
+    <div class="setup-overlay" id="setup-overlay">
+        <div class="setup-box">
+            <h3>🎤 TRTC Voice Chat Setup</h3>
+            <p>To use voice chat, you need to configure TRTC settings.</p>
+            
+            <div style="text-align: left; margin: 20px 0;">
+                <p><strong>Option 1: Use Test Mode</strong></p>
+                <p>Click below to use test mode (voice only works locally).</p>
+                <button id="test-mode-btn" style="width: 100%; margin-bottom: 20px;">🎮 Use Test Mode</button>
+                
+                <p><strong>Option 2: Configure TRTC</strong></p>
+                <p>Enter your TRTC SDKAppID (get it from <a href="https://console.cloud.tencent.com/trtc" target="_blank" style="color: var(--secondary);">Tencent Cloud Console</a>):</p>
+                <input type="number" id="sdkappid-input" placeholder="Enter SDKAppID (e.g., 1400000000)" min="1">
+                <button id="configure-btn" style="width: 100%;">⚙️ Configure TRTC</button>
+            </div>
+            
+            <p style="font-size: 12px; color: #888; margin-top: 20px;">
+                <strong>Note:</strong> For production, you need a backend server to generate UserSig.
+                <a href="https://cloud.tencent.com/document/product/647/34342" target="_blank" style="color: var(--secondary);">Learn more</a>
+            </p>
+        </div>
+    </div>
+    
     <!-- Header -->
     <div class="header">
         <div class="room-info">
@@ -346,14 +397,14 @@
             <span>👥 Group: <span id="group-name">---</span></span>
         </div>
         <div class="controls">
-            <button id="toggle-mic-btn" class="secondary">🎤 Mute</button>
+            <button id="toggle-mic-btn" class="secondary" disabled>🎤 Mute</button>
             <button id="leave-btn">🚪 Leave Room</button>
         </div>
     </div>
     
     <!-- Status -->
     <div class="status-bar" id="status">
-        Connecting to voice server...
+        Setting up voice chat...
     </div>
     
     <!-- Mic Slots -->
@@ -387,12 +438,6 @@
     <!-- Main Application Script -->
     <script>
     // ========== CONFIGURATION ==========
-    // Get these from your Tencent Cloud Console
-    const TRTC_CONFIG = {
-        SDKAppID: 0, // REPLACE with your actual SDKAppID
-        // In production, generate UserSig on your backend server
-    };
-    
     // Get URL parameters
     const params = new URLSearchParams(window.location.search);
     const ROOM_ID = parseInt(params.get("room") || Math.floor(Math.random() * 900000 + 100000));
@@ -409,65 +454,129 @@
     let localStream = null;
     let currentMicSlot = null;
     let isMicMuted = false;
-    let remoteUsers = new Map(); // userId -> {audioElement, slot, userName}
+    let remoteUsers = new Map();
     let socket = null;
     let hasRequestedMicPermission = false;
+    let isInTestMode = false;
     
     // ========== TRTC INITIALIZATION ==========
-    async function initTRTC() {
+    async function initTRTC(sdkAppId = 0) {
         try {
             updateStatus('Initializing audio system...', 'info');
             
+            if (sdkAppId === 0 || sdkAppId === '0') {
+                isInTestMode = true;
+                console.warn('⚠️ Running in test mode - voice chat will not connect to TRTC');
+                updateStatus('Test mode: Voice chat will work locally only', 'warning');
+                
+                // Hide setup overlay
+                document.getElementById('setup-overlay').style.display = 'none';
+                
+                // Initialize UI and chat
+                initMicSlots();
+                connectToSignalingServer();
+                
+                // Enable mic button
+                document.getElementById('toggle-mic-btn').disabled = false;
+                
+                return;
+            }
+            
             // For demo purposes - in production, get UserSig from your backend
             const userId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            const userSig = await generateTestUserSig(userId, sdkAppId);
+            
+            if (!userSig) {
+                throw new Error('Failed to generate UserSig. Check your SDKAppID.');
+            }
             
             // Create TRTC client
             trtcClient = TRTC.createClient({
                 mode: 'rtc',
-                sdkAppId: TRTC_CONFIG.SDKAppID,
+                sdkAppId: parseInt(sdkAppId),
                 userId: userId,
-                userSig: await generateTestUserSig(userId), // This is for testing only
+                userSig: userSig,
                 useStringRoomId: false
+            });
+            
+            console.log('TRTC Client created with:', {
+                sdkAppId: parseInt(sdkAppId),
+                userId: userId,
+                roomId: ROOM_ID
             });
             
             // Setup event listeners
             setupTRTCEvents();
             
             // Join the room
+            updateStatus('Joining voice room...', 'info');
             await trtcClient.join({ roomId: ROOM_ID });
+            
+            console.log('✅ Joined TRTC room:', ROOM_ID);
             updateStatus(`✅ Connected to voice room ${ROOM_ID}`, 'success');
             
-            console.log('✅ TRTC initialized successfully');
+            // Hide setup overlay
+            document.getElementById('setup-overlay').style.display = 'none';
             
-            // Initialize mic slots UI
+            // Initialize UI
             initMicSlots();
-            
-            // Connect to signaling server for chat
             connectToSignalingServer();
+            
+            // Enable mic button
+            document.getElementById('toggle-mic-btn').disabled = false;
             
         } catch (error) {
             console.error('❌ TRTC initialization failed:', error);
-            updateStatus(`❌ Audio initialization failed: ${error.message}`, 'error');
             
-            // Fallback: still initialize UI and chat
-            initMicSlots();
-            connectToSignalingServer();
-            updateStatus('💬 Text chat only mode (voice not available)', 'warning');
+            let errorMessage = `Audio initialization failed: `;
+            if (error.message.includes('SDKAppID') || error.message.includes('userSig')) {
+                errorMessage += 'Invalid SDKAppID or UserSig. Please check your configuration.';
+            } else if (error.message.includes('timeout')) {
+                errorMessage += 'Connection timeout. Please check your network.';
+            } else {
+                errorMessage += error.message;
+            }
+            
+            updateStatus(errorMessage, 'error');
+            
+            // Show retry option
+            document.getElementById('setup-overlay').style.display = 'flex';
+            document.getElementById('setup-overlay').innerHTML = `
+                <div class="setup-box">
+                    <h3>❌ TRTC Setup Failed</h3>
+                    <p>${errorMessage}</p>
+                    <button onclick="location.reload()" style="width: 100%; margin-top: 20px;">🔄 Retry</button>
+                    <button onclick="useTestMode()" style="width: 100%; margin-top: 10px; background: var(--bg-light);">🎮 Use Test Mode Instead</button>
+                </div>
+            `;
         }
+    }
+    
+    function useTestMode() {
+        isInTestMode = true;
+        document.getElementById('setup-overlay').style.display = 'none';
+        updateStatus('Test mode: Voice chat will work locally only', 'warning');
+        initMicSlots();
+        connectToSignalingServer();
+        document.getElementById('toggle-mic-btn').disabled = false;
     }
     
     // ========== PERMISSION HANDLING ==========
     async function requestMicrophonePermission() {
         if (hasRequestedMicPermission) {
-            return false;
+            return true;
         }
         
         try {
             updateStatus('Requesting microphone permission...', 'info');
             
-            // Test microphone access first
+            // Test microphone access
             const testStream = await navigator.mediaDevices.getUserMedia({ 
-                audio: true,
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                },
                 video: false 
             });
             
@@ -475,23 +584,17 @@
             testStream.getTracks().forEach(track => track.stop());
             
             hasRequestedMicPermission = true;
+            updateStatus('✅ Microphone permission granted', 'success');
             return true;
             
         } catch (error) {
             console.error('Microphone permission denied:', error);
             
-            // Show specific error message
             let errorMessage = 'Microphone access denied. ';
-            if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
-                errorMessage += 'No microphone device found.';
-            } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-                errorMessage += 'Microphone is in use by another application.';
-            } else if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
-                errorMessage += 'Cannot satisfy audio constraints.';
-            } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+            if (error.name === 'NotAllowedError') {
                 errorMessage += 'Please allow microphone access in your browser settings.';
-            } else if (error.name === 'TypeError' || error.message.includes('type')) {
-                errorMessage += 'Invalid microphone configuration.';
+            } else if (error.name === 'NotFoundError') {
+                errorMessage += 'No microphone device found.';
             } else {
                 errorMessage += error.message || 'Unknown error occurred.';
             }
@@ -502,12 +605,24 @@
     }
     
     async function setupLocalAudioStream() {
-        if (!trtcClient) {
-            updateStatus('TRTC client not initialized', 'error');
-            return false;
-        }
-        
         try {
+            if (isInTestMode) {
+                // In test mode, just create a mock stream
+                updateStatus('Test mode: Using local audio only', 'warning');
+                localStream = {
+                    muteAudio: (muted) => {
+                        isMicMuted = muted;
+                        console.log(muted ? '🔇 Mic muted' : '🎤 Mic unmuted');
+                    },
+                    stop: () => console.log('🎤 Mock stream stopped')
+                };
+                return true;
+            }
+            
+            if (!trtcClient) {
+                throw new Error('TRTC client not initialized');
+            }
+            
             // Create local audio stream
             const userId = trtcClient.getUserId();
             localStream = TRTC.createStream({
@@ -518,34 +633,32 @@
             
             await localStream.initialize();
             
-            // For testing: play local audio (muted)
+            // Play local audio (muted)
             const localAudioDiv = document.createElement('div');
             localAudioDiv.id = 'local-audio';
             document.getElementById('audio-container').appendChild(localAudioDiv);
             await localStream.play('local-audio');
             
-            // Mute local audio playback (users don't need to hear themselves)
+            // Mute local audio playback
             const localAudioElement = document.querySelector('#local-audio audio');
             if (localAudioElement) {
-                localAudioElement.volume = 0; // Mute self-audio
+                localAudioElement.volume = 0;
             }
             
             // Publish stream to room
             await trtcClient.publish(localStream);
             
-            updateStatus('🎤 Microphone ready! Click a slot to join voice chat', 'success');
+            updateStatus('🎤 Microphone ready!', 'success');
             return true;
             
         } catch (error) {
             console.error('Failed to setup local audio:', error);
             
             let errorMessage = 'Failed to setup microphone: ';
-            if (error.message.includes('permission') || error.name === 'NotAllowedError') {
-                errorMessage += 'Microphone permission denied. Click a slot to request permission.';
-            } else if (error.message.includes('NotFoundError') || error.name === 'NotFoundError') {
+            if (error.message.includes('permission')) {
+                errorMessage += 'Microphone permission denied.';
+            } else if (error.message.includes('NotFoundError')) {
                 errorMessage += 'No microphone found.';
-            } else if (error.message.includes('NotReadableError')) {
-                errorMessage += 'Microphone is busy or not readable.';
             } else {
                 errorMessage += error.message;
             }
@@ -557,6 +670,8 @@
     
     // ========== TRTC EVENT HANDLERS ==========
     function setupTRTCEvents() {
+        if (!trtcClient) return;
+        
         // When remote user publishes stream
         trtcClient.on('stream-added', async (event) => {
             const remoteStream = event.stream;
@@ -633,32 +748,11 @@
             }
         });
         
-        // When remote user starts speaking
-        trtcClient.on('audio-volume', (event) => {
-            event.result.forEach(({ userId, audioVolume }) => {
-                if (audioVolume > 10) { // Volume threshold
-                    const userData = remoteUsers.get(userId);
-                    if (userData && userData.slot) {
-                        const slotElement = document.querySelector(`.mic-slot[data-slot="${userData.slot}"]`);
-                        if (slotElement) {
-                            slotElement.classList.add('speaking');
-                            
-                            // Remove speaking indicator after a delay
-                            clearTimeout(slotElement._speakingTimeout);
-                            slotElement._speakingTimeout = setTimeout(() => {
-                                slotElement.classList.remove('speaking');
-                            }, 500);
-                        }
-                    }
-                }
-            });
-        });
-        
         // Connection state changes
         trtcClient.on('connection-state-changed', (event) => {
             console.log('📡 Connection state:', event.state);
             if (event.state === 'disconnected') {
-                updateStatus('Disconnected from voice server. Reconnecting...', 'warning');
+                updateStatus('Disconnected from voice server', 'warning');
             } else if (event.state === 'connected') {
                 updateStatus('✅ Connected to voice server', 'success');
             }
@@ -667,7 +761,7 @@
         // Error handling
         trtcClient.on('error', (error) => {
             console.error('TRTC error:', error);
-            updateStatus(`Audio error: ${error.message}`, 'error');
+            updateStatus(`Voice error: ${error.message}`, 'error');
         });
     }
     
@@ -707,7 +801,7 @@
         if (!hasRequestedMicPermission) {
             const hasPermission = await requestMicrophonePermission();
             if (!hasPermission) {
-                updateStatus('❌ Microphone permission required. Please allow access to join voice chat.', 'error');
+                updateStatus('❌ Microphone permission required', 'error');
                 return;
             }
         }
@@ -732,7 +826,7 @@
                 roomId: ROOM_ID,
                 slot: slot,
                 userName: USER_NAME,
-                userId: trtcClient ? trtcClient.getUserId() : 'unknown'
+                userId: trtcClient ? trtcClient.getUserId() : 'test_user'
             });
         }
         
@@ -792,7 +886,10 @@
         if (!localStream) return;
         
         isMicMuted = !isMicMuted;
-        localStream.muteAudio(isMicMuted);
+        
+        if (localStream.muteAudio) {
+            localStream.muteAudio(isMicMuted);
+        }
         
         const toggleBtn = document.getElementById('toggle-mic-btn');
         toggleBtn.textContent = isMicMuted ? '🎤 Unmute' : '🎤 Mute';
@@ -820,23 +917,13 @@
             socket.emit('join_room', {
                 roomId: ROOM_ID,
                 userName: USER_NAME,
-                userId: trtcClient ? trtcClient.getUserId() : null
+                userId: trtcClient ? trtcClient.getUserId() : 'test_user'
             });
         });
         
         socket.on('room_data', (data) => {
-            // ✅ FIXED: Clear previous messages first
+            // Clear previous messages
             document.getElementById('chat-container').innerHTML = '';
-            
-            // Load only messages from AFTER the user joined (no history)
-            if (data.messages && data.messages.length > 0) {
-                // Only show system messages for now
-                data.messages.forEach(msg => {
-                    if (msg.user === 'System') {
-                        addMessage(msg);
-                    }
-                });
-            }
             
             // Show welcome message
             addMessage({
@@ -863,16 +950,15 @@
             if (userName !== USER_NAME) {
                 updateMicSlotUI(slot, userName, false);
                 
-                // If we have TRTC user with this userId, update their slot
+                // Update TRTC user slot if exists
                 for (const [uid, userData] of remoteUsers.entries()) {
-                    if (uid === userId || !userData.slot) {
+                    if (uid === userId) {
                         userData.slot = slot;
                         userData.userName = userName;
                         break;
                     }
                 }
                 
-                // Show system message
                 addMessage({
                     user: 'System',
                     text: `${userName} joined mic slot ${slot}`
@@ -884,37 +970,12 @@
             const { slot, userName } = data;
             clearMicSlot(slot);
             
-            // Show system message
             if (userName !== USER_NAME) {
                 addMessage({
                     user: 'System',
                     text: `${userName} left mic slot ${slot}`
                 });
             }
-        });
-        
-        socket.on('user_slot_info', (data) => {
-            const { userId, slot, userName } = data;
-            const userData = remoteUsers.get(userId);
-            if (userData) {
-                userData.slot = slot;
-                userData.userName = userName;
-                updateMicSlotUI(slot, userName, false);
-            }
-        });
-        
-        socket.on('user_joined', (data) => {
-            addMessage({
-                user: 'System',
-                text: `${data.userName} joined the room`
-            });
-        });
-        
-        socket.on('user_left', (data) => {
-            addMessage({
-                user: 'System',
-                text: `${data.userName} left the room`
-            });
         });
         
         socket.on('disconnect', () => {
@@ -976,15 +1037,28 @@
         }
     }
     
-    // TEST ONLY - Generate a test UserSig
-    // In production, this MUST be done on your backend server
-    async function generateTestUserSig(userId) {
+    // Generate UserSig (for testing - in production, use backend)
+    async function generateTestUserSig(userId, sdkAppId) {
         // This is a placeholder - you need to implement proper UserSig generation
         // For testing, you can use Tencent's debug UserSig generator or implement server-side
-        console.warn('⚠️ Using test UserSig. For production, generate UserSig on your backend server.');
+        console.warn('⚠️ Using placeholder UserSig. For production, generate UserSig on your backend server.');
         
-        // For now, return a placeholder (this won't work with real TRTC)
+        // For now, return a placeholder
         // You need to set up a backend endpoint that generates proper UserSig
+        // Example endpoint: https://your-server.com/generate-usersig?userId=xxx&sdkAppId=xxx
+        
+        try {
+            // Try to get UserSig from a local server if available
+            const response = await fetch(`/generate-usersig?userId=${userId}&sdkAppId=${sdkAppId}`);
+            if (response.ok) {
+                const data = await response.json();
+                return data.userSig;
+            }
+        } catch (error) {
+            console.log('No local UserSig generator found, using placeholder');
+        }
+        
+        // Return placeholder that won't work with real TRTC
         return 'eJw1zEEKwzAMQNG7dG0LDiS4F3MHH6DYUJoWUgZ39-5A-v9Pv5*Fm9WlMlWOgJ*d7mJ4BKG2lS4r8TDKvnapZic1i*O6zPOMYbZJ2K0HlJIJZSLZRCoZqWbZ3l9f33-v1w8UvzY_';
     }
     
@@ -1006,7 +1080,7 @@
         }
         
         // Stop local stream
-        if (localStream) {
+        if (localStream && localStream.stop) {
             localStream.stop();
         }
         
@@ -1022,12 +1096,31 @@
         window.location.href = 'index.html';
     });
     
+    document.getElementById('test-mode-btn').addEventListener('click', () => {
+        useTestMode();
+    });
+    
+    document.getElementById('configure-btn').addEventListener('click', () => {
+        const sdkAppId = document.getElementById('sdkappid-input').value;
+        if (sdkAppId && parseInt(sdkAppId) > 0) {
+            initTRTC(sdkAppId);
+        } else {
+            alert('Please enter a valid SDKAppID');
+        }
+    });
+    
+    document.getElementById('sdkappid-input').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            document.getElementById('configure-btn').click();
+        }
+    });
+    
     // Cleanup on page unload
     window.addEventListener('beforeunload', () => {
         if (trtcClient) {
             trtcClient.leave().catch(() => {});
         }
-        if (localStream) {
+        if (localStream && localStream.stop) {
             localStream.stop();
         }
         if (socket) {
@@ -1039,13 +1132,15 @@
     });
     
     // ========== INITIALIZATION ==========
-    // Initialize when page loads
     document.addEventListener('DOMContentLoaded', () => {
         // Focus on message input
         document.getElementById('message-input').focus();
         
-        // Initialize TRTC
-        initTRTC().catch(console.error);
+        // Show setup overlay
+        document.getElementById('setup-overlay').style.display = 'flex';
+        
+        // Connect to chat server immediately (voice will be initialized later)
+        connectToSignalingServer();
     });
     </script>
 </body>
