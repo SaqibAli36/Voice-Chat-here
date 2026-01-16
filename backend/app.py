@@ -540,6 +540,57 @@ def not_found(error):
 def server_error(error):
     return jsonify({"error": "Internal server error"}), 500
 
+@app.route("/api/trtc/config", methods=["POST"])
+def trtc_config():
+    """Generate TRTC configuration for frontend (new endpoint)"""
+    try:
+        data = request.get_json()
+        user_id = data.get("userId", f"user_{int(datetime.now().timestamp())}_{os.urandom(4).hex()}")
+        room_id = data.get("roomId", 0)
+        
+        print(f"🔧 TRTC Config Request: userId={user_id[:15]}..., roomId={room_id}")
+        
+        # Check if TRTC is configured
+        if not TRTC_CONFIG["SDK_APP_ID"] or not TRTC_CONFIG["SECRET_KEY"]:
+            print("⚠️ TRTC not configured, returning test mode")
+            return jsonify({
+                "sdkAppId": 0,  # Test mode
+                "userId": user_id,
+                "userSig": "test_signature_for_development",
+                "roomId": room_id,
+                "success": True,
+                "mode": "test",
+                "message": "TRTC not configured. Running in test mode."
+            })
+        
+        # Generate UserSig
+        user_sig = generate_trtc_user_sig(
+            user_id=user_id,
+            sdk_app_id=int(TRTC_CONFIG["SDK_APP_ID"]),
+            secret_key=TRTC_CONFIG["SECRET_KEY"],
+            expire_time=TRTC_CONFIG["EXPIRE_TIME"]
+        )
+        
+        if not user_sig:
+            raise Exception("Failed to generate UserSig")
+        
+        return jsonify({
+            "sdkAppId": int(TRTC_CONFIG["SDK_APP_ID"]),
+            "userId": user_id,
+            "userSig": user_sig,
+            "roomId": room_id,
+            "success": True,
+            "mode": "production"
+        })
+        
+    except Exception as e:
+        print(f"❌ Error in TRTC config: {str(e)}")
+        return jsonify({
+            "error": "Failed to generate TRTC configuration",
+            "message": str(e),
+            "success": False
+        }), 500
+        
 # ========== MAIN ENTRY POINT ==========
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
